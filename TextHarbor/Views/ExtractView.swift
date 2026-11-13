@@ -45,22 +45,7 @@ struct ExtractView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("選擇擷取來源").font(.headline)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        ForEach(CaptureMode.allCases) { item in
-                            Button {
-                                mode = item
-                                resultText = ""
-                            } label: {
-                                Label(item.rawValue, systemImage: item.symbol)
-                                    .font(.subheadline).fontWeight(.medium)
-                                    .frame(maxWidth: .infinity, minHeight: 48)
-                                    .background(mode == item ? Color.accentColor.opacity(0.14) : Color(.secondarySystemGroupedBackground))
-                                    .clipShape(RoundedRectangle(cornerRadius: 13))
-                                    .overlay(RoundedRectangle(cornerRadius: 13)
-                                        .strokeBorder(mode == item ? Color.accentColor : Color.clear, lineWidth: 1.5))
-                            }.buttonStyle(.plain)
-                        }
-                    }
+                    modeGrid
                     sourceControls
                     if processing {
                         VStack(alignment: .leading, spacing: 8) {
@@ -75,26 +60,7 @@ struct ExtractView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(processing || !hasSource)
-                    if !resultText.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("辨識結果").font(.headline)
-                                Spacer()
-                                Text("\(resultText.count) 字").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Text(resultText).font(.callout)
-                                .textSelection(.enabled)
-                                .lineLimit(14)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            HStack {
-                                Button("複製") { UIPasteboard.general.string = resultText }.buttonStyle(.bordered)
-                                Button("編輯與儲存") { createDocument() }.buttonStyle(.borderedProminent)
-                            }
-                        }
-                        .padding()
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
+                    resultSection
                 }.padding()
             }
             .background(Color(.systemGroupedBackground))
@@ -154,6 +120,48 @@ struct ExtractView: View {
             .alert("提示", isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
                 Button("確定", role: .cancel) { alertMessage = nil }
             } message: { Text(alertMessage ?? "") }
+        }
+    }
+
+    private var modeGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            ForEach(CaptureMode.allCases) { item in
+                Button {
+                    mode = item
+                    resultText = ""
+                } label: {
+                    Label(item.rawValue, systemImage: item.symbol)
+                        .font(.subheadline).fontWeight(.medium)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(mode == item ? Color.accentColor.opacity(0.14) : Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 13))
+                        .overlay(RoundedRectangle(cornerRadius: 13)
+                            .strokeBorder(mode == item ? Color.accentColor : Color.clear, lineWidth: 1.5))
+                }.buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder private var resultSection: some View {
+        if !resultText.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("辨識結果").font(.headline)
+                    Spacer()
+                    Text("\(resultText.count) 字").font(.caption).foregroundStyle(.secondary)
+                }
+                Text(resultText).font(.callout)
+                    .textSelection(.enabled)
+                    .lineLimit(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Button("複製") { UIPasteboard.general.string = resultText }.buttonStyle(.bordered)
+                    Button("編輯與儲存") { createDocument() }.buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
     }
 
