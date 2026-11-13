@@ -1,6 +1,6 @@
 workflows:
   ios-unsigned-check:
-    name: TextHarbor iOS 編譯檢查（免簽署）
+    name: 字捕手 iOS 編譯檢查（免簽署）
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
