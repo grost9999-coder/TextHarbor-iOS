@@ -1,6 +1,6 @@
 import Foundation
 
-struct ExtractedDocument: Identifiable, Codable, Equatable {
+struct ExtractedDocument: Identifiable, Codable, Hashable {
     var id = UUID()
     var title: String
     var text: String
