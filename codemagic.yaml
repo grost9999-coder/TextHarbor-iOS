@@ -61,19 +61,26 @@ workflows:
       - name: 上傳前檢查 IPA 內實際版本
         script: |
           python3 - <<'PY'
-          import glob, zipfile, plistlib, re
+          import glob, zipfile, plistlib, re, sys
           candidates = glob.glob("build/ios/ipa/*.ipa")
-          assert candidates, "No IPA was generated"
+          if not candidates:
+              sys.exit("No IPA was generated")
           for ipa in candidates:
               with zipfile.ZipFile(ipa) as z:
-                  matches = [p for p in z.namelist() if re.fullmatch(r"Payload/[^/]+\\.app/Info\\.plist", p)]
-                  assert len(matches) == 1, f"Cannot locate main app Info.plist: {matches}"
+                  paths = z.namelist()
+                  matches = [path for path in paths if re.fullmatch(r"Payload/[^/]+[.]app/Info[.]plist", path)]
+                  if len(matches) != 1:
+                      print("IPA Info.plist candidates:", [path for path in paths if path.endswith("Info.plist")][:30])
+                      sys.exit(f"Expected one main app Info.plist, found {len(matches)}")
                   info = plistlib.loads(z.read(matches[0]))
                   version = str(info.get("CFBundleVersion", "")).strip()
                   bundle_id = info.get("CFBundleIdentifier")
-                  print(f"IPA: {ipa} | bundle={bundle_id} | CFBundleVersion={version}")
-                  assert re.fullmatch(r"[0-9]+(?:\\.[0-9]+){0,2}", version), "Missing or invalid CFBundleVersion in the signed IPA"
-                  assert bundle_id == "com.grost9999.textharbor", "Unexpected bundle identifier"
+                  short_version = str(info.get("CFBundleShortVersionString", "")).strip()
+                  print(f"IPA: {ipa} | bundle={bundle_id} | version={short_version} | build={version}")
+                  if not re.fullmatch(r"[0-9]+(?:[.][0-9]+){0,2}", version):
+                      sys.exit("Missing or invalid CFBundleVersion in the signed IPA")
+                  if bundle_id != "com.grost9999.textharbor":
+                      sys.exit("Unexpected bundle identifier")
           PY
     artifacts:
       - build/ios/ipa/*.ipa
