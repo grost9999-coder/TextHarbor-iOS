@@ -1,0 +1,26 @@
+name: iOS Build Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Build for iOS Simulator without signing
+        run: |
+          set -o pipefail
+          xcodebuild -project TextHarbor.xcodeproj -scheme TextHarbor -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/TextHarborDerivedData" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/text-harbor-build.log"
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: ${{ runner.temp }}/text-harbor-build.log
+          if-no-files-found: ignore
