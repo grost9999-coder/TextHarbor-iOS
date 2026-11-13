@@ -1,0 +1,27 @@
+workflows:
+  ios-unsigned-check:
+    name: TextHarbor iOS 編譯檢查（免簽署）
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: 檢查 Xcode 專案
+        script: |
+          xcodebuild -version
+          xcodebuild -list -project TextHarbor.xcodeproj
+      - name: 編譯 iOS Simulator App（免簽署）
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project TextHarbor.xcodeproj \
+            -scheme TextHarbor \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$CM_BUILD_DIR/text-harbor-build.log"
+    artifacts:
+      - text-harbor-build.log
+      - DerivedData/Build/Products/Debug-iphonesimulator/*.app
