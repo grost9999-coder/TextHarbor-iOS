@@ -1,6 +1,6 @@
-# 擷字匣 TextHarbor
+# 字捕手｜TextHarbor
 
-iPhone 原生 SwiftUI 文字擷取 App（iOS 17+）
+iPhone 原生 SwiftUI 文字擷取 App（iOS 17+）。App 在 iPhone 主畫面顯示名稱為「字捕手」，GitHub 專案與技術代號保留 TextHarbor，既有 Bundle ID `com.grost9999.textharbor` 不變。
 
 ## 功能
 - 影片畫面 OCR
