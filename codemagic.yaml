@@ -34,10 +34,15 @@ workflows:
       app_store_connect: Codemagic-ClearPocket
     environment:
       xcode: latest
+      vars:
+        APP_STORE_CONNECT_ALTOOL_ADDITIONAL_ARGUMENTS: "--use-old-altool"
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.grost9999.textharbor
     scripts:
+      - name: 產生字捕手暫用 App Store 圖示
+        script: |
+          swift scripts/generate-app-icon.swift
       - name: 設定新版 Build Number
         script: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $CM_BUILD_NUMBER" TextHarbor/Info.plist
