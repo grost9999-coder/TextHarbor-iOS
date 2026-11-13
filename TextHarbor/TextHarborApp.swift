@@ -12,7 +12,8 @@ struct TextHarborApp: App {
                     .tabItem { Label("文件庫", systemImage: "books.vertical") }
                 NavigationStack {
                     List {
-                        Section("支援的擷取") {
+                        Section("字捕手｜智慧文字擷取") {
+                            Text("影片、語音、照片、截圖、網頁與字幕，一站式擷取文字。")
                             Text("影片畫面 OCR／影片字幕 OCR／影片語音辨識")
                             Text("照片與截圖 OCR／網頁文字擷取")
                         }
@@ -27,7 +28,7 @@ struct TextHarborApp: App {
                             Text("影片 OCR 為抽樣辨識，極短暫的字幕可能漏抓；文字仍需校對。")
                         }
                     }
-                    .navigationTitle("關於")
+                    .navigationTitle("關於字捕手")
                 }.tabItem { Label("關於", systemImage: "info.circle") }
             }
             .environmentObject(library)
