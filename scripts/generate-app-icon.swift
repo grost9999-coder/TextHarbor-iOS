@@ -19,10 +19,27 @@ let attributes: [NSAttributedString.Key: Any] = [
 let rect = symbol.boundingRect(with: NSSize(width: 600, height: 520), options: [], attributes: attributes)
 symbol.draw(at: NSPoint(x: (CGFloat(size) - rect.width) / 2, y: 260), withAttributes: attributes)
 image.unlockFocus()
-guard let tiff = image.tiffRepresentation,
-      let rep = NSBitmapImageRep(data: tiff),
-      let png = rep.representation(using: .png, properties: [:]) else {
-    fatalError("Unable to create icon")
+guard let rep = NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: size,
+    pixelsHigh: size,
+    bitsPerSample: 8,
+    samplesPerPixel: 3,
+    hasAlpha: false,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 0
+), let context = NSGraphicsContext(bitmapImageRep: rep) else {
+    fatalError("Unable to prepare opaque RGB icon")
+}
+NSGraphicsContext.saveGraphicsState()
+NSGraphicsContext.current = context
+image.draw(in: NSRect(x: 0, y: 0, width: size, height: size))
+context.flushGraphics()
+NSGraphicsContext.restoreGraphicsState()
+guard let png = rep.representation(using: .png, properties: [:]) else {
+    fatalError("Unable to encode icon")
 }
 let output = "TextHarbor/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
 try FileManager.default.createDirectory(atPath: (output as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
