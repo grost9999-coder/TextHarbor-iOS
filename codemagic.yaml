@@ -25,3 +25,33 @@ workflows:
     artifacts:
       - text-harbor-build.log
       - DerivedData/Build/Products/Debug-iphonesimulator/*.app
+
+  ios-testflight:
+    name: 字捕手 TestFlight 發布
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: Codemagic-ClearPocket
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.grost9999.textharbor
+    scripts:
+      - name: 設定新版 Build Number
+        script: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $CM_BUILD_NUMBER" TextHarbor/Info.plist
+      - name: 套用 Apple Distribution 簽署
+        script: |
+          xcode-project use-profiles
+      - name: 建置簽署的 iPhone IPA
+        script: |
+          xcode-project build-ipa --project TextHarbor.xcodeproj --scheme TextHarbor
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+        submit_to_app_store: false
