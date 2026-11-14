@@ -2,6 +2,7 @@ import Foundation
 import Vision
 import UIKit
 import AVFoundation
+import ImageIO
 
 struct VideoOCRStats {
     let requestedFrames: Int
@@ -9,27 +10,64 @@ struct VideoOCRStats {
     let failedFrames: Int
     let detectedLines: Int
     let retainedLines: Int
+    let rotatedFrames: Int
+    let rawText: String
 }
 
 struct OCRService {
-    static func recognize(_ image: CGImage, subtitleOnly: Bool = false) throws -> [String] {
+    private static func observations(_ image: CGImage,
+                                     subtitleOnly: Bool = false,
+                                     orientation: CGImagePropertyOrientation = .up) throws -> [VNRecognizedTextObservation] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        request.minimumTextHeight = 0.005
         request.recognitionLanguages = ["zh-Hant", "en-US"]
+        request.minimumTextHeight = 0.005
         if subtitleOnly {
             request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 0.35)
         }
-        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-        return (request.results ?? [])
-            .sorted {
-                if abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.017 {
-                    return $0.boundingBox.midY > $1.boundingBox.midY
-                }
-                return $0.boundingBox.minX < $1.boundingBox.minX
+        try VNImageRequestHandler(cgImage: image, orientation: orientation, options: [:]).perform([request])
+        return (request.results ?? []).sorted {
+            if abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.017 {
+                return $0.boundingBox.midY > $1.boundingBox.midY
             }
-            .compactMap { $0.topCandidates(1).first?.string }
+            return $0.boundingBox.minX < $1.boundingBox.minX
+        }
+    }
+
+    private static func extractedLines(_ results: [VNRecognizedTextObservation]) -> [String] {
+        results.compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    static func recognize(_ image: CGImage, subtitleOnly: Bool = false) throws -> [String] {
+        try extractedLines(observations(image, subtitleOnly: subtitleOnly))
+    }
+
+    // The screen recording can contain an actual 90-degree UI rotation
+    // while its encoded canvas remains portrait. Video metadata alone does
+    // not describe the orientation of the text inside each frame.
+    // Periodically compare OCR quality for up/left/right orientations.
+    private static func chooseOrientation(_ image: CGImage, subtitleOnly: Bool)
+      throws -> (orientation: CGImagePropertyOrientation, lines: [String]) {
+        var best: (orientation: CGImagePropertyOrientation, lines: [String], score: Double)?
+        for orientation: CGImagePropertyOrientation in [.up, .left, .right] {
+            let results = try observations(image, subtitleOnly: subtitleOnly, orientation: orientation)
+            var score = 0.0
+            for observation in results {
+                if let candidate = observation.topCandidates(1).first {
+                    let meaningful = candidate.string.filter { !$0.isWhitespace && !$0.isNewline }.count
+                    if meaningful >= 2 {
+                        score += Double(min(meaningful, 60)) * Double(candidate.confidence)
+                    }
+                }
+            }
+            let lines = extractedLines(results)
+            if best == nil || score > best!.score {
+                best = (orientation, lines, score)
+            }
+        }
+        guard let best else { return (.up, []) }
+        return (best.orientation, best.lines)
     }
 
     static func recognizeImages(_ images: [UIImage], progress: @escaping (Double) -> Void,
@@ -63,32 +101,51 @@ struct OCRService {
                 generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
                 generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
 
-                // More frequent sampling for short-lived text and faster scrolling.
-                // Sampling cannot recover frames blurred by motion, so record how
-                // many frames could actually be read and show diagnostics to user.
                 let interval = max(0.30, duration / 1500)
                 let count = max(1, Int(ceil(duration / interval)))
                 var output = TextAccumulator()
+                var rawParts: [String] = []
                 var analyzed = 0
                 var failed = 0
+                var rotated = 0
+                var orientation: CGImagePropertyOrientation = .up
+
                 for i in 0..<count {
                     let second = min(max(0, duration - 0.01), Double(i) * interval + interval / 2)
                     let time = CMTime(seconds: second, preferredTimescale: 600)
                     do {
                         let frame = try generator.copyCGImage(at: time, actualTime: nil)
-                        let recognized = try recognize(frame, subtitleOnly: subtitleOnly)
+                        let lines: [String]
+                        if i == 0 || i % 20 == 0 {
+                            let choice = try chooseOrientation(frame, subtitleOnly: subtitleOnly)
+                            orientation = choice.orientation
+                            lines = choice.lines
+                        } else {
+                            lines = try extractedLines(observations(frame,
+                                                                    subtitleOnly: subtitleOnly,
+                                                                    orientation: orientation))
+                        }
                         analyzed += 1
-                        output.appendFrame(recognized)
+                        if orientation != .up { rotated += 1 }
+                        output.appendFrame(lines)
+                        if !lines.isEmpty {
+                            let seconds = Int(second)
+                            let stamp = String(format: "[%02d:%02d]", seconds / 60, seconds % 60)
+                            rawParts.append(stamp + "\n" + lines.joined(separator: "\n"))
+                        }
                     } catch {
                         failed += 1
                     }
                     DispatchQueue.main.async { progress(Double(i + 1) / Double(count)) }
                 }
+
                 let info = VideoOCRStats(requestedFrames: count,
                                          analyzedFrames: analyzed,
                                          failedFrames: failed,
                                          detectedLines: output.observedLineCount,
-                                         retainedLines: output.lines.count)
+                                         retainedLines: output.lines.count,
+                                         rotatedFrames: rotated,
+                                         rawText: rawParts.joined(separator: "\n\n"))
                 DispatchQueue.main.async {
                     stats?(info)
                     completion(.success(output.text))
