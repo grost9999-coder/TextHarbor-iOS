@@ -35,6 +35,7 @@ struct ExtractView: View {
     @State private var processing = false
     @State private var progress = 0.0
     @State private var resultText = ""
+    @State private var videoStats: VideoOCRStats?
     @State private var resultDoc: ExtractedDocument?
     @State private var alertMessage: String?
     @StateObject private var web = WebExtractor()
@@ -61,6 +62,7 @@ struct ExtractView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(processing || !hasSource)
                     resultSection
+                    videoDiagnostics
                 }.padding()
             }
             .background(Color(.systemGroupedBackground))
@@ -165,6 +167,23 @@ struct ExtractView: View {
         }
     }
 
+    @ViewBuilder private var videoDiagnostics: some View {
+        if let info = videoStats {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("影片辨識報告").font(.headline)
+                Text("抽樣影格：\(info.requestedFrames)｜已分析：\(info.analyzedFrames)｜失敗：\(info.failedFrames)")
+                Text("OCR 原始行數：\(info.detectedLines)｜合併後行數：\(info.retainedLines)")
+                Text("文字若仍不完整，請改用慢速捲動且停留在清晰畫面的原始影片，或將影片分段辨識並人工校對。")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
     @ViewBuilder private var sourceControls: some View {
         switch mode {
         case .video, .speech, .subtitles:
@@ -190,7 +209,7 @@ struct ExtractView: View {
                     Text("主要辨識畫面下方 35% 的字幕；字幕若在其他位置請改用「影片畫面」。")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("每約 0.7 秒取樣一格，長影片最多分析 600 格。")
+                    Text("完整擷取模式：約每 0.3 秒抽樣一格，最多分析 1,500 格；影片過快捲動仍可能漏字。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -232,6 +251,7 @@ struct ExtractView: View {
         processing = true
         progress = 0
         resultText = ""
+        videoStats = nil
         let finish: (Result<String, Error>) -> Void = { result in
             processing = false
             progress = 1
@@ -247,7 +267,8 @@ struct ExtractView: View {
         case .video, .subtitles:
             guard let selectedVideo else { processing = false; return }
             OCRService.recognizeVideo(selectedVideo, subtitleOnly: mode == .subtitles,
-                                      progress: { progress = $0 }, completion: finish)
+                                      progress: { progress = $0 },
+                                      stats: { videoStats = $0 }, completion: finish)
         case .speech:
             guard let selectedVideo else { processing = false; return }
             speech.transcribe(videoURL: selectedVideo, locale: locale, completion: finish)
