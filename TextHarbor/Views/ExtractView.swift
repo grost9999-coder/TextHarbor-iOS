@@ -38,6 +38,7 @@ struct ExtractView: View {
     @State private var videoStats: VideoOCRStats?
     @State private var mergedVideoText = ""
     @State private var viewingRawVideoText = false
+    @State private var showAllResult = false
     @State private var resultDoc: ExtractedDocument?
     @State private var alertMessage: String?
     @StateObject private var web = WebExtractor()
@@ -136,6 +137,7 @@ struct ExtractView: View {
                     videoStats = nil
                     mergedVideoText = ""
                     viewingRawVideoText = false
+                    showAllResult = false
                 } label: {
                     Label(item.rawValue, systemImage: item.symbol)
                         .font(.subheadline).fontWeight(.medium)
@@ -159,8 +161,12 @@ struct ExtractView: View {
                 }
                 Text(resultText).font(.callout)
                     .textSelection(.enabled)
-                    .lineLimit(14)
+                    .lineLimit(showAllResult ? nil : 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if resultText.components(separatedBy: .newlines).count > 14 {
+                    Button(showAllResult ? "收合預覽" : "展開完整辨識文字") { showAllResult.toggle() }
+                        .font(.footnote)
+                }
                 HStack {
                     Button("複製") { UIPasteboard.general.string = resultText }.buttonStyle(.bordered)
                     Button("編輯與儲存") { createDocument() }.buttonStyle(.borderedProminent)
@@ -269,6 +275,7 @@ struct ExtractView: View {
         videoStats = nil
         mergedVideoText = ""
         viewingRawVideoText = false
+        showAllResult = false
         let finish: (Result<String, Error>) -> Void = { result in
             processing = false
             progress = 1
