@@ -3,11 +3,20 @@ import Vision
 import UIKit
 import AVFoundation
 
+struct VideoOCRStats {
+    let requestedFrames: Int
+    let analyzedFrames: Int
+    let failedFrames: Int
+    let detectedLines: Int
+    let retainedLines: Int
+}
+
 struct OCRService {
     static func recognize(_ image: CGImage, subtitleOnly: Bool = false) throws -> [String] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.005
         request.recognitionLanguages = ["zh-Hant", "en-US"]
         if subtitleOnly {
             request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 0.35)
@@ -42,6 +51,7 @@ struct OCRService {
 
     static func recognizeVideo(_ url: URL, subtitleOnly: Bool,
                                progress: @escaping (Double) -> Void,
+                               stats: ((VideoOCRStats) -> Void)? = nil,
                                completion: @escaping (Result<String, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -50,23 +60,39 @@ struct OCRService {
                 guard duration.isFinite, duration > 0 else { throw ExtractionError.invalidVideo }
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
-                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.12, preferredTimescale: 600)
-                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.12, preferredTimescale: 600)
-                let interval = max(0.7, duration / 600)
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
+
+                // More frequent sampling for short-lived text and faster scrolling.
+                // Sampling cannot recover frames blurred by motion, so record how
+                // many frames could actually be read and show diagnostics to user.
+                let interval = max(0.30, duration / 1500)
                 let count = max(1, Int(ceil(duration / interval)))
                 var output = TextAccumulator()
+                var analyzed = 0
+                var failed = 0
                 for i in 0..<count {
-                    let second = min(duration - 0.01, Double(i) * interval + interval / 2)
-                    let time = CMTime(seconds: max(0, second), preferredTimescale: 600)
+                    let second = min(max(0, duration - 0.01), Double(i) * interval + interval / 2)
+                    let time = CMTime(seconds: second, preferredTimescale: 600)
                     do {
                         let frame = try generator.copyCGImage(at: time, actualTime: nil)
-                        output.appendFrame(try recognize(frame, subtitleOnly: subtitleOnly))
+                        let recognized = try recognize(frame, subtitleOnly: subtitleOnly)
+                        analyzed += 1
+                        output.appendFrame(recognized)
                     } catch {
-                        // 略過無法取出的影格
+                        failed += 1
                     }
                     DispatchQueue.main.async { progress(Double(i + 1) / Double(count)) }
                 }
-                DispatchQueue.main.async { completion(.success(output.text)) }
+                let info = VideoOCRStats(requestedFrames: count,
+                                         analyzedFrames: analyzed,
+                                         failedFrames: failed,
+                                         detectedLines: output.observedLineCount,
+                                         retainedLines: output.lines.count)
+                DispatchQueue.main.async {
+                    stats?(info)
+                    completion(.success(output.text))
+                }
             } catch {
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
