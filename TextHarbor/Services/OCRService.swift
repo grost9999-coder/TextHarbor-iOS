@@ -11,10 +11,44 @@ struct VideoOCRStats {
     let detectedLines: Int
     let retainedLines: Int
     let rotatedFrames: Int
+    let deduplicatedLines: Int
     let rawText: String
 }
 
+enum VideoOCRQuality {
+    case balanced
+    case thorough
+
+    var interval: Double {
+        switch self { case .balanced: return 0.6; case .thorough: return 0.25 }
+    }
+
+    var maxFrames: Double {
+        switch self { case .balanced: return 900; case .thorough: return 1600 }
+    }
+
+    var probeEvery: Int {
+        switch self { case .balanced: return 12; case .thorough: return 6 }
+    }
+}
+
 struct OCRService {
+    /// Upscaling can help small screen-recorded characters, but cannot restore
+    /// detail that was already lost by video compression or motion blur.
+    private static func enlargedForOCR(_ image: CGImage, quality: VideoOCRQuality) -> CGImage {
+        guard quality == .thorough, image.width < 1350 else { return image }
+        let scale = min(1.5, 1350.0 / Double(image.width))
+        let width = Int(Double(image.width) * scale)
+        let height = Int(Double(image.height) * scale)
+        guard let context = CGContext(data: nil, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage() ?? image
+    }
+
     private static func observations(_ image: CGImage,
                                      subtitleOnly: Bool = false,
                                      orientation: CGImagePropertyOrientation = .up) throws -> [VNRecognizedTextObservation] {
@@ -47,10 +81,12 @@ struct OCRService {
     // while its encoded canvas remains portrait. Video metadata alone does
     // not describe the orientation of the text inside each frame.
     // Periodically compare OCR quality for up/left/right orientations.
-    private static func chooseOrientation(_ image: CGImage, subtitleOnly: Bool)
+    private static func chooseOrientation(_ image: CGImage, subtitleOnly: Bool,
+                                          preferred: CGImagePropertyOrientation)
       throws -> (orientation: CGImagePropertyOrientation, lines: [String]) {
         var best: (orientation: CGImagePropertyOrientation, lines: [String], score: Double)?
-        for orientation in [CGImagePropertyOrientation.up, .left, .right] {
+        var preferredCandidate: (orientation: CGImagePropertyOrientation, lines: [String], score: Double)?
+        for orientation in [CGImagePropertyOrientation.up, .left, .right, .down] {
             let results = try observations(image, subtitleOnly: subtitleOnly, orientation: orientation)
             var score = 0.0
             for observation in results {
@@ -62,11 +98,15 @@ struct OCRService {
                 }
             }
             let lines = extractedLines(results)
+            if orientation == preferred { preferredCandidate = (orientation, lines, score) }
             if best == nil || score > best!.score {
                 best = (orientation, lines, score)
             }
         }
         guard let best else { return (.up, []) }
+        if let existing = preferredCandidate, existing.score >= best.score * 0.88 {
+            return (existing.orientation, existing.lines)
+        }
         return (best.orientation, best.lines)
     }
 
@@ -74,7 +114,7 @@ struct OCRService {
                                 completion: @escaping (Result<String, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                var output = TextAccumulator()
+                var output = TextAccumulator(policy: .preserveAll)
                 for (index, image) in images.enumerated() {
                     guard let cgImage = image.cgImage else { continue }
                     output.appendFrame(try recognize(cgImage))
@@ -88,6 +128,8 @@ struct OCRService {
     }
 
     static func recognizeVideo(_ url: URL, subtitleOnly: Bool,
+                               mergePolicy: TextMergePolicy = .scrollingList,
+                               quality: VideoOCRQuality = .thorough,
                                progress: @escaping (Double) -> Void,
                                stats: ((VideoOCRStats) -> Void)? = nil,
                                completion: @escaping (Result<String, Error>) -> Void) {
@@ -98,36 +140,47 @@ struct OCRService {
                 guard duration.isFinite, duration > 0 else { throw ExtractionError.invalidVideo }
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
-                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
-                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.04, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.04, preferredTimescale: 600)
 
-                let interval = max(0.30, duration / 1500)
-                let count = max(1, Int(ceil(duration / interval)))
-                var output = TextAccumulator()
+                // Include the beginning and final portion of the recording.
+                let interval = max(quality.interval, duration / quality.maxFrames)
+                let count = Int(ceil(duration / interval)) + 1
+                var output = TextAccumulator(policy: mergePolicy)
                 var rawParts: [String] = []
                 var analyzed = 0
                 var failed = 0
                 var rotated = 0
+                var weakFrameStreak = 0
                 var orientation: CGImagePropertyOrientation = .up
 
                 for i in 0..<count {
-                    let second = min(max(0, duration - 0.01), Double(i) * interval + interval / 2)
+                    let second = min(max(0, duration - 0.01), Double(i) * interval)
                     let time = CMTime(seconds: second, preferredTimescale: 600)
                     do {
                         let frame = try generator.copyCGImage(at: time, actualTime: nil)
+                        let image = enlargedForOCR(frame, quality: quality)
                         let lines: [String]
-                        if i == 0 || i % 20 == 0 {
-                            let choice = try chooseOrientation(frame, subtitleOnly: subtitleOnly)
+                        let needsProbe = i == 0 ||
+                            i % quality.probeEvery == 0 ||
+                            weakFrameStreak >= 2
+                        if needsProbe {
+                            let choice = try chooseOrientation(image, subtitleOnly: subtitleOnly,
+                                                               preferred: orientation)
                             orientation = choice.orientation
                             lines = choice.lines
                         } else {
-                            lines = try extractedLines(observations(frame,
-                                                                    subtitleOnly: subtitleOnly,
+                            lines = try extractedLines(observations(image, subtitleOnly: subtitleOnly,
                                                                     orientation: orientation))
                         }
+                        let meaningful = lines.filter {
+                            $0.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4
+                        }.count
+                        weakFrameStreak = meaningful < 2 ? min(weakFrameStreak + 1, 3) : 0
                         analyzed += 1
                         if orientation != .up { rotated += 1 }
-                        output.appendFrame(lines)
+                        output.appendFrame(lines, timestamp: second)
+
                         if !lines.isEmpty {
                             let seconds = Int(second)
                             let stamp = String(format: "[%02d:%02d]", seconds / 60, seconds % 60)
@@ -135,6 +188,7 @@ struct OCRService {
                         }
                     } catch {
                         failed += 1
+                        weakFrameStreak = min(weakFrameStreak + 1, 3)
                     }
                     DispatchQueue.main.async { progress(Double(i + 1) / Double(count)) }
                 }
@@ -145,6 +199,7 @@ struct OCRService {
                                          detectedLines: output.observedLineCount,
                                          retainedLines: output.lines.count,
                                          rotatedFrames: rotated,
+                                         deduplicatedLines: output.skippedDuplicateLines,
                                          rawText: rawParts.joined(separator: "\n\n"))
                 DispatchQueue.main.async {
                     stats?(info)
