@@ -1,13 +1,29 @@
 import Foundation
 
-/// Merge overlapping video OCR frames without discarding non-overlapping content.
-/// The prior implementation searched for ANY familiar line in the last 50 lines
-/// and discarded everything before that line. Scrolling pages often repeat
-/// headers and UI elements, so that algorithm could silently lose paragraphs.
+/// Conservative OCR merge. It never discards a new, different line just
+/// because a fixed header or one neighbouring line was seen before.
+enum TextMergePolicy {
+    /// For scrolling catalogues: each exactly matching line appears once.
+    /// Never fuzzy-match product codes or names: near matches may be different items.
+    case scrollingList
+    /// For general videos: a line can reappear after the specified pause.
+    case recent(seconds: Double)
+    /// Preserve every recognised line, useful for multiple different photographs.
+    case preserveAll
+}
+
 struct TextAccumulator {
     private(set) var lines: [String] = []
-    private var precedingFrame: [String] = []
     private(set) var observedLineCount = 0
+    private(set) var skippedDuplicateLines = 0
+    private var frameNumber = 0
+    private let policy: TextMergePolicy
+    private var lastObserved: [String: Double] = [:]
+    private var seenGlobally = Set<String>()
+
+    init(policy: TextMergePolicy = .recent(seconds: 20)) {
+        self.policy = policy
+    }
 
     static func clean(_ input: String) -> String {
         input.components(separatedBy: .newlines)
@@ -21,75 +37,33 @@ struct TextAccumulator {
             .filter { !$0.isWhitespace && !$0.isNewline }
     }
 
-    mutating func appendFrame(_ frameLines: [String]) {
-        let fresh = frameLines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !fresh.isEmpty else { return }
-        observedLineCount += fresh.count
-
-        if precedingFrame.isEmpty {
-            lines.append(contentsOf: fresh)
-            precedingFrame = fresh
-            return
-        }
-
-        let old = precedingFrame.map(Self.normalized)
-        let current = fresh.map(Self.normalized)
-
-        // Prefer an exact suffix/prefix match between ADJACENT frames only.
-        // This handles scrolling paragraphs without confusing repeated headers
-        // with text seen much earlier in the video.
-        let maximum = min(old.count, current.count)
-        var overlap = 0
-        if maximum > 0 {
-            for length in stride(from: maximum, through: 1, by: -1) {
-                if old.suffix(length).elementsEqual(current.prefix(length)) {
-                    overlap = length
-                    break
+    mutating func appendFrame(_ frameLines: [String], timestamp: Double? = nil) {
+        frameNumber += 1
+        let time = timestamp ?? Double(frameNumber)
+        for source in frameLines {
+            let line = source.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            observedLineCount += 1
+            let key = Self.normalized(line)
+            guard !key.isEmpty else { continue }
+            switch policy {
+            case .scrollingList:
+                if !seenGlobally.insert(key).inserted {
+                    skippedDuplicateLines += 1
+                    continue
                 }
-            }
-        }
-
-        if overlap == current.count {
-            // New frame is entirely inside the previous frame.
-        } else if overlap > 0 {
-            lines.append(contentsOf: fresh.dropFirst(overlap))
-        } else if old == current {
-            // Exact duplicate frame.
-        } else {
-            // Detect an overlapping subsequence without deleting novel text.
-            // Example: old A B C D / new B C D E (overlap B C D).
-            var bestStart = 0
-            var bestCount = 0
-            for start in current.indices {
-                let remaining = current.count - start
-                let bound = min(old.count, remaining)
-                if bound == 0 { continue }
-                for length in stride(from: bound, through: 1, by: -1) {
-                    let matches = old.suffix(length).elementsEqual(current[start..<(start + length)])
-                    if matches && length > bestCount {
-                        bestStart = start
-                        bestCount = length
-                        break
-                    }
+            case .recent(let seconds):
+                if let last = lastObserved[key], time >= last && time - last < seconds {
+                    lastObserved[key] = time
+                    skippedDuplicateLines += 1
+                    continue
                 }
+                lastObserved[key] = time
+            case .preserveAll:
+                break
             }
-            if bestCount >= 2 {
-                // Preserve text before overlap if it is not already in the
-                // output; otherwise only append the genuinely new suffix.
-                let prefix = Array(fresh.prefix(bestStart))
-                if !prefix.isEmpty && !lines.suffix(prefix.count).elementsEqual(prefix) {
-                    lines.append(contentsOf: prefix)
-                }
-                lines.append(contentsOf: fresh.dropFirst(bestStart + bestCount))
-            } else {
-                // Single matching UI labels are not sufficient evidence to
-                // throw text away. Preserve all lines, including uncertain ones.
-                lines.append(contentsOf: fresh)
-            }
+            lines.append(line)
         }
-
-        precedingFrame = fresh
     }
 
     var text: String { lines.joined(separator: "\n") }
