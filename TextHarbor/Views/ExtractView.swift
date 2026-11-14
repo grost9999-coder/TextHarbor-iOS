@@ -41,6 +41,7 @@ struct ExtractView: View {
     @State private var showAllResult = false
     @State private var scrollingCatalogueMode = true
     @State private var thoroughVideoRecognition = true
+    @State private var activeVideoControl: VideoOCRControl?
     @State private var resultDoc: ExtractedDocument?
     @State private var alertMessage: String?
     @StateObject private var web = WebExtractor()
@@ -58,6 +59,13 @@ struct ExtractView: View {
                             ProgressView(value: progress)
                             Text("正在辨識… \(Int(progress * 100))%")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if mode == .video || mode == .subtitles {
+                                Button("停止並保留已擷取文字") {
+                                    activeVideoControl?.requestStop()
+                                }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
+                            }
                         }
                     }
                     Button(action: startExtraction) {
@@ -148,7 +156,7 @@ struct ExtractView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 13))
                         .overlay(RoundedRectangle(cornerRadius: 13)
                             .strokeBorder(mode == item ? Color.accentColor : Color.clear, lineWidth: 1.5))
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plain).disabled(processing)
             }
         }
     }
@@ -188,6 +196,10 @@ struct ExtractView: View {
                 Text("OCR 原始行數：\(info.detectedLines)｜合併後行數：\(info.retainedLines)")
                 Text("已去除重複行數：\(info.deduplicatedLines)")
                 Text("旋轉方向辨識影格：\(info.rotatedFrames)")
+                if info.wasStoppedEarly {
+                    Text("已停止辨識，以下為停止前已保留的結果。")
+                        .foregroundStyle(.orange)
+                }
                 if !info.rawText.isEmpty {
                     Button(viewingRawVideoText ? "回到合併後文字" : "查看未去重原始文字") {
                         if !viewingRawVideoText { mergedVideoText = resultText }
@@ -292,6 +304,7 @@ struct ExtractView: View {
     private func startExtraction() {
         processing = true
         progress = 0
+        activeVideoControl = nil
         resultText = ""
         videoStats = nil
         mergedVideoText = ""
@@ -299,7 +312,8 @@ struct ExtractView: View {
         showAllResult = false
         let finish: (Result<String, Error>) -> Void = { result in
             processing = false
-            progress = 1
+            if videoStats?.wasStoppedEarly != true { progress = 1 }
+            activeVideoControl = nil
             switch result {
             case .success(let text):
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -315,8 +329,11 @@ struct ExtractView: View {
                 ? .recent(seconds: 15)
                 : (scrollingCatalogueMode ? .scrollingList : .recent(seconds: 20))
             let quality: VideoOCRQuality = thoroughVideoRecognition ? .thorough : .balanced
+            let control = VideoOCRControl()
+            activeVideoControl = control
             OCRService.recognizeVideo(selectedVideo, subtitleOnly: mode == .subtitles,
                                       mergePolicy: mergePolicy, quality: quality,
+                                      control: control,
                                       progress: { progress = $0 },
                                       stats: { videoStats = $0 }, completion: finish)
         case .speech:
