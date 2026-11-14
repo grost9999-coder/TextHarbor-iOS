@@ -12,7 +12,26 @@ struct VideoOCRStats {
     let retainedLines: Int
     let rotatedFrames: Int
     let deduplicatedLines: Int
+    let wasStoppedEarly: Bool
     let rawText: String
+}
+
+/// The user can stop a lengthy scan and keep the text extracted so far.
+final class VideoOCRControl {
+    private let lock = NSLock()
+    private var stopped = false
+
+    func requestStop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+    }
+
+    var shouldStop: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
 }
 
 enum VideoOCRQuality {
@@ -130,6 +149,7 @@ struct OCRService {
     static func recognizeVideo(_ url: URL, subtitleOnly: Bool,
                                mergePolicy: TextMergePolicy = .scrollingList,
                                quality: VideoOCRQuality = .thorough,
+                               control: VideoOCRControl? = nil,
                                progress: @escaping (Double) -> Void,
                                stats: ((VideoOCRStats) -> Void)? = nil,
                                completion: @escaping (Result<String, Error>) -> Void) {
@@ -153,8 +173,13 @@ struct OCRService {
                 var rotated = 0
                 var weakFrameStreak = 0
                 var orientation: CGImagePropertyOrientation = .up
+                var stopped = false
 
                 for i in 0..<count {
+                    if control?.shouldStop == true {
+                        stopped = true
+                        break
+                    }
                     let second = min(max(0, duration - 0.01), Double(i) * interval)
                     let time = CMTime(seconds: second, preferredTimescale: 600)
                     do {
@@ -200,10 +225,13 @@ struct OCRService {
                                          retainedLines: output.lines.count,
                                          rotatedFrames: rotated,
                                          deduplicatedLines: output.skippedDuplicateLines,
+                                         wasStoppedEarly: stopped,
                                          rawText: rawParts.joined(separator: "\n\n"))
                 DispatchQueue.main.async {
                     stats?(info)
-                    completion(.success(output.text))
+                    completion(output.lines.isEmpty && stopped
+                               ? .failure(ExtractionError.cancelled)
+                               : .success(output.text))
                 }
             } catch {
                 DispatchQueue.main.async { completion(.failure(error)) }
@@ -213,12 +241,13 @@ struct OCRService {
 }
 
 enum ExtractionError: LocalizedError {
-    case invalidVideo, noSpeech, noText
+    case invalidVideo, noSpeech, noText, cancelled
     var errorDescription: String? {
         switch self {
         case .invalidVideo: return "影片無法讀取或長度不正確。"
         case .noSpeech: return "影片中沒有可辨識的語音，或無法匯出音軌。"
         case .noText: return "沒有辨識到文字，請檢查畫面清晰度或更改擷取模式。"
+        case .cancelled: return "辨識已停止，尚未取得任何文字。"
         }
     }
 }
