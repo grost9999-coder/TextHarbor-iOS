@@ -36,6 +36,8 @@ struct ExtractView: View {
     @State private var progress = 0.0
     @State private var resultText = ""
     @State private var videoStats: VideoOCRStats?
+    @State private var mergedVideoText = ""
+    @State private var viewingRawVideoText = false
     @State private var resultDoc: ExtractedDocument?
     @State private var alertMessage: String?
     @StateObject private var web = WebExtractor()
@@ -131,6 +133,9 @@ struct ExtractView: View {
                 Button {
                     mode = item
                     resultText = ""
+                    videoStats = nil
+                    mergedVideoText = ""
+                    viewingRawVideoText = false
                 } label: {
                     Label(item.rawValue, systemImage: item.symbol)
                         .font(.subheadline).fontWeight(.medium)
@@ -173,6 +178,16 @@ struct ExtractView: View {
                 Text("影片辨識報告").font(.headline)
                 Text("抽樣影格：\(info.requestedFrames)｜已分析：\(info.analyzedFrames)｜失敗：\(info.failedFrames)")
                 Text("OCR 原始行數：\(info.detectedLines)｜合併後行數：\(info.retainedLines)")
+                Text("旋轉方向辨識影格：\(info.rotatedFrames)")
+                if !info.rawText.isEmpty {
+                    Button(viewingRawVideoText ? "回到合併後文字" : "查看未去重原始文字") {
+                        if !viewingRawVideoText { mergedVideoText = resultText }
+                        viewingRawVideoText.toggle()
+                        resultText = viewingRawVideoText ? info.rawText : mergedVideoText
+                    }.buttonStyle(.bordered)
+                    Text("原始文字含重複影格及時間標記，可用來比對漏字；切換後也可複製及儲存。")
+                        .foregroundStyle(.secondary)
+                }
                 Text("文字若仍不完整，請改用慢速捲動且停留在清晰畫面的原始影片，或將影片分段辨識並人工校對。")
                     .foregroundStyle(.secondary)
             }
@@ -252,6 +267,8 @@ struct ExtractView: View {
         progress = 0
         resultText = ""
         videoStats = nil
+        mergedVideoText = ""
+        viewingRawVideoText = false
         let finish: (Result<String, Error>) -> Void = { result in
             processing = false
             progress = 1
