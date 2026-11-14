@@ -50,7 +50,7 @@ struct OCRService {
     private static func chooseOrientation(_ image: CGImage, subtitleOnly: Bool)
       throws -> (orientation: CGImagePropertyOrientation, lines: [String]) {
         var best: (orientation: CGImagePropertyOrientation, lines: [String], score: Double)?
-        for orientation: CGImagePropertyOrientation in [.up, .left, .right] {
+        for orientation in [CGImagePropertyOrientation.up, .left, .right] {
             let results = try observations(image, subtitleOnly: subtitleOnly, orientation: orientation)
             var score = 0.0
             for observation in results {
