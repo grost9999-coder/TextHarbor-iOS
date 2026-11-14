@@ -39,6 +39,8 @@ struct ExtractView: View {
     @State private var mergedVideoText = ""
     @State private var viewingRawVideoText = false
     @State private var showAllResult = false
+    @State private var scrollingCatalogueMode = true
+    @State private var thoroughVideoRecognition = true
     @State private var resultDoc: ExtractedDocument?
     @State private var alertMessage: String?
     @StateObject private var web = WebExtractor()
@@ -184,6 +186,7 @@ struct ExtractView: View {
                 Text("影片辨識報告").font(.headline)
                 Text("抽樣影格：\(info.requestedFrames)｜已分析：\(info.analyzedFrames)｜失敗：\(info.failedFrames)")
                 Text("OCR 原始行數：\(info.detectedLines)｜合併後行數：\(info.retainedLines)")
+                Text("已去除重複行數：\(info.deduplicatedLines)")
                 Text("旋轉方向辨識影格：\(info.rotatedFrames)")
                 if !info.rawText.isEmpty {
                     Button(viewingRawVideoText ? "回到合併後文字" : "查看未去重原始文字") {
@@ -218,6 +221,24 @@ struct ExtractView: View {
                     Label(sourceLabel, systemImage: "checkmark.circle.fill")
                         .font(.footnote).foregroundStyle(.green)
                 }
+                if mode == .video {
+                    Toggle(isOn: $scrollingCatalogueMode) {
+                        VStack(alignment: .leading) {
+                            Text("捲動清單／商品代碼模式")
+                            Text("同一行只保留首次辨識結果；不同代碼不會合併。適合商品清單與網頁錄影。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Toggle(isOn: $thoroughVideoRecognition) {
+                        VStack(alignment: .leading) {
+                            Text("高精度完整擷取")
+                            Text("較密集抽樣及放大細字；需要較長的處理時間。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else if mode == .subtitles {
+                    Toggle("高精度字幕辨識", isOn: $thoroughVideoRecognition)
+                }
                 if mode == .speech {
                     Picker("語音語言", selection: $locale) {
                         Text("繁體中文").tag("zh-TW")
@@ -230,7 +251,7 @@ struct ExtractView: View {
                     Text("主要辨識畫面下方 35% 的字幕；字幕若在其他位置請改用「影片畫面」。")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("完整擷取模式：約每 0.3 秒抽樣一格，最多分析 1,500 格；影片過快捲動仍可能漏字。")
+                    Text(thoroughVideoRecognition ? "高精度：約每 0.25 秒抽樣一格；上限約 1,600 格。" : "一般模式：約每 0.6 秒抽樣一格；上限約 900 格。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -290,7 +311,12 @@ struct ExtractView: View {
         switch mode {
         case .video, .subtitles:
             guard let selectedVideo else { processing = false; return }
+            let mergePolicy: TextMergePolicy = mode == .subtitles
+                ? .recent(seconds: 15)
+                : (scrollingCatalogueMode ? .scrollingList : .recent(seconds: 20))
+            let quality: VideoOCRQuality = thoroughVideoRecognition ? .thorough : .balanced
             OCRService.recognizeVideo(selectedVideo, subtitleOnly: mode == .subtitles,
+                                      mergePolicy: mergePolicy, quality: quality,
                                       progress: { progress = $0 },
                                       stats: { videoStats = $0 }, completion: finish)
         case .speech:
